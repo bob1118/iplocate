@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"regexp"
 	"strconv"
 	"strings"
@@ -140,12 +141,18 @@ func parseIPInfo(data []byte) (*GeoInfo, error) {
 
 var (
 	ipipIPRe  = regexp.MustCompile(`\d{1,3}(?:\.\d{1,3}){3}`)
+	ipipV6Re  = regexp.MustCompile(`(?:[0-9A-Fa-f]{0,4}:){2,7}[0-9A-Fa-f]{0,4}`)
 	ipipLocRe = regexp.MustCompile(`来自于\s*[：:]?\s*(.*)`)
 )
 
 func parseIPIPNet(data []byte) (*GeoInfo, error) {
 	s := strings.TrimSpace(string(data))
 	ip := ipipIPRe.FindString(s)
+	if ip == "" {
+		if c := ipipV6Re.FindString(s); c != "" && net.ParseIP(c) != nil {
+			ip = c
+		}
+	}
 	if ip == "" {
 		return nil, fmt.Errorf("响应中未找到 IP")
 	}

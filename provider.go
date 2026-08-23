@@ -51,7 +51,7 @@ func defaultProviders() []provider {
 	return []provider{
 		{
 			name:  "ip-api.com",
-			url:   "http://ip-api.com/json/?fields=status,message,country,regionName,city,isp,query&lang=zh-CN",
+			url:   "http://ip-api.com/json/{ip}?fields=status,message,country,regionName,city,isp,query&lang=zh-CN",
 			parse: parseIPAPI,
 		},
 		{
@@ -70,6 +70,22 @@ func defaultProviders() []provider {
 			parse: parseIPIPNet,
 		},
 	}
+}
+
+func providersFor(queryIP string) []provider {
+	var out []provider
+	for _, p := range defaultProviders() {
+		if !strings.Contains(p.url, "{ip}") {
+			if queryIP != "" {
+				continue
+			}
+			out = append(out, p)
+			continue
+		}
+		p.url = strings.ReplaceAll(p.url, "{ip}", queryIP)
+		out = append(out, p)
+	}
+	return out
 }
 
 func httpGet(ctx context.Context, client *http.Client, url string) ([]byte, error) {

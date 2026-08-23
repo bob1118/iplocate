@@ -196,6 +196,77 @@ func TestParseInvalidData(t *testing.T) {
 	}
 }
 
+func TestParseIPIPNetV6(t *testing.T) {
+	data := []byte("当前 IP：2408:8240:6612:43f4:bcbe:c27b:e3d3:3e11  来自于：中国 浙江 绍兴  联通\n")
+	info, err := parseIPIPNet(data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if info.IP != "2408:8240:6612:43f4:bcbe:c27b:e3d3:3e11" {
+		t.Fatalf("parsed incorrectly: %+v", info)
+	}
+	for key, want := range map[string]string{
+		"country": "中国",
+		"region":  "浙江",
+		"city":    "绍兴",
+		"isp":     "联通",
+	} {
+		if got := fieldOf(t, info, key); got != want {
+			t.Fatalf("%s = %q, want %q", key, got, want)
+		}
+	}
+}
+
+func TestParseIPIPNetV6Compressed(t *testing.T) {
+	data := []byte("当前 IP：2408:8240::3e11　来自于：中国 浙江 绍兴")
+	info, err := parseIPIPNet(data)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if info.IP != "2408:8240::3e11" {
+		t.Fatalf("parsed incorrectly: %+v", info)
+	}
+}
+
+func TestParseIPIPNetRejectsNonIP(t *testing.T) {
+	data := []byte("时间 12:34:56:78 来自于： nowhere")
+	if _, err := parseIPIPNet(data); err == nil {
+		t.Fatal("expected error when no valid IP present")
+	}
+}
+
+func TestProvidersFor(t *testing.T) {
+	auto := providersFor("")
+	if len(auto) != len(defaultProviders()) {
+		t.Fatalf("expected %d providers in auto mode, got %d", len(defaultProviders()), len(auto))
+	}
+	for _, p := range auto {
+		if strings.Contains(p.url, "{ip}") {
+			t.Fatalf("placeholder not resolved for %s: %s", p.name, p.url)
+		}
+	}
+	var ipapi *provider
+	for i := range auto {
+		if auto[i].name == "ip-api.com" {
+			ipapi = &auto[i]
+		}
+	}
+	if ipapi == nil || !strings.Contains(ipapi.url, "/json/?fields=") {
+		t.Fatalf("ip-api auto URL malformed: %v", ipapi)
+	}
+
+	explicit := providersFor("2001:db8::1")
+	if len(explicit) != 1 {
+		t.Fatalf("expected 1 explicit provider, got %d: %v", len(explicit), explicit)
+	}
+	if explicit[0].name != "ip-api.com" {
+		t.Fatalf("unexpected explicit provider: %+v", explicit[0])
+	}
+	if !strings.Contains(explicit[0].url, "/json/2001:db8::1?") {
+		t.Fatalf("explicit URL missing query IP: %s", explicit[0].url)
+	}
+}
+
 func okServer(t *testing.T, body string) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

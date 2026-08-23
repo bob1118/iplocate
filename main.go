@@ -26,17 +26,23 @@ func run(jsonOut bool, timeout time.Duration) int {
 	}
 
 	v6OK := networkAvailable("tcp6")
+	v6Addr := ""
 	if v6OK {
 		if ip6, iface, err := localIP("tcp6"); err == nil {
 			res.LocalIPv6, res.InterfaceV6 = ip6.String(), iface
+			v6Addr = ip6.String()
 		}
 	} else {
 		fmt.Fprintln(os.Stderr, "提示: 未检测到可用的 IPv6 网络，已跳过 IPv6 查询")
 	}
 
-	res.PublicIPv4 = fetchGeo(clientV4, timeout, "tcp4")
+	res.PublicIPv4 = fetchGeo(clientV4, timeout, "tcp4", "")
 	if v6OK {
-		res.PublicIPv6 = fetchGeo(clientV6, timeout, "tcp6")
+		res.PublicIPv6 = fetchGeo(clientV6, timeout, "tcp6", "")
+		if res.PublicIPv6.Error != "" && v6Addr != "" {
+			fmt.Fprintln(os.Stderr, "提示: 公网 IPv6 直连查询失败，改用本机地址显式查询其位置")
+			res.PublicIPv6 = fetchGeo(clientV4, timeout, "tcp6", v6Addr)
+		}
 	}
 
 	printResult(res, jsonOut)
@@ -47,9 +53,9 @@ func run(jsonOut bool, timeout time.Duration) int {
 	return 0
 }
 
-func fetchGeo(client *http.Client, timeout time.Duration, network string) *geoResult {
+func fetchGeo(client *http.Client, timeout time.Duration, network, queryIP string) *geoResult {
 	family := familyOf(network)
-	info, err := fetchPublicIP(defaultProviders(), client, timeout)
+	info, err := fetchPublicIP(providersFor(queryIP), client, timeout)
 	if err != nil {
 		return &geoResult{Family: family, Error: fmt.Sprintf("%s 所有服务均失败:\n  %s", family, err)}
 	}
