@@ -17,18 +17,10 @@ const (
 	dialTimeout = 2 * time.Second
 )
 
-type GeoInfo struct {
-	IP     string
-	Family string
-	Source string
-	Raw    string
-	Fields []field
-}
-
 type provider struct {
 	name  string
 	url   string
-	parse func([]byte) (*GeoInfo, error)
+	parse func([]byte) (*geoResult, error)
 }
 
 func newFamClient(network string) *http.Client {
@@ -75,15 +67,10 @@ func defaultProviders() []provider {
 func providersFor(queryIP string) []provider {
 	var out []provider
 	for _, p := range defaultProviders() {
-		if !strings.Contains(p.url, "{ip}") {
-			if queryIP != "" {
-				continue
-			}
+		if strings.Contains(p.url, "{ip}") || queryIP == "" {
+			p.url = strings.ReplaceAll(p.url, "{ip}", queryIP)
 			out = append(out, p)
-			continue
 		}
-		p.url = strings.ReplaceAll(p.url, "{ip}", queryIP)
-		out = append(out, p)
 	}
 	return out
 }
@@ -105,7 +92,7 @@ func httpGet(ctx context.Context, client *http.Client, url string) ([]byte, erro
 	return io.ReadAll(io.LimitReader(resp.Body, maxBodySize))
 }
 
-func fetchPublicIP(providers []provider, client *http.Client, timeout time.Duration) (*GeoInfo, error) {
+func fetchPublicIP(providers []provider, client *http.Client, timeout time.Duration) (*geoResult, error) {
 	var errs []string
 	for _, p := range providers {
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -127,4 +114,14 @@ func fetchPublicIP(providers []provider, client *http.Client, timeout time.Durat
 		errs = append(errs, fmt.Sprintf("%s: %v", p.name, err))
 	}
 	return nil, errors.New(strings.Join(errs, "\n  "))
+}
+
+func fetchGeo(client *http.Client, timeout time.Duration, network, queryIP string) *geoResult {
+	family := familyOf(network)
+	res, err := fetchPublicIP(providersFor(queryIP), client, timeout)
+	if err != nil {
+		return &geoResult{Family: family, Error: fmt.Sprintf("%s 所有服务均失败:\n  %s", family, err)}
+	}
+	res.Family = family
+	return res
 }

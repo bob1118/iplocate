@@ -3,7 +3,6 @@ package main
 import (
 	"flag"
 	"fmt"
-	"net/http"
 	"os"
 	"time"
 )
@@ -51,19 +50,4 @@ func run(jsonOut bool, timeout time.Duration) int {
 		return 1
 	}
 	return 0
-}
-
-func fetchGeo(client *http.Client, timeout time.Duration, network, queryIP string) *geoResult {
-	family := familyOf(network)
-	info, err := fetchPublicIP(providersFor(queryIP), client, timeout)
-	if err != nil {
-		return &geoResult{Family: family, Error: fmt.Sprintf("%s 所有服务均失败:\n  %s", family, err)}
-	}
-	return &geoResult{
-		IP:     info.IP,
-		Family: family,
-		Source: info.Source,
-		Raw:    info.Raw,
-		Fields: info.Fields,
-	}
 }

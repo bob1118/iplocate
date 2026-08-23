@@ -108,7 +108,7 @@ func lookupField(fields []field, key string) string {
 	return ""
 }
 
-func parseIPAPI(data []byte) (*GeoInfo, error) {
+func parseIPAPI(data []byte) (*geoResult, error) {
 	fields, err := flattenJSON(data)
 	if err != nil {
 		return nil, err
@@ -124,10 +124,10 @@ func parseIPAPI(data []byte) (*GeoInfo, error) {
 	if ip == "" {
 		return nil, fmt.Errorf("响应中缺少 IP")
 	}
-	return &GeoInfo{IP: ip, Fields: fields}, nil
+	return &geoResult{IP: ip, Fields: fields}, nil
 }
 
-func parseIPInfo(data []byte) (*GeoInfo, error) {
+func parseIPInfo(data []byte) (*geoResult, error) {
 	fields, err := flattenJSON(data)
 	if err != nil {
 		return nil, err
@@ -136,7 +136,7 @@ func parseIPInfo(data []byte) (*GeoInfo, error) {
 	if ip == "" {
 		return nil, fmt.Errorf("响应中缺少 IP")
 	}
-	return &GeoInfo{IP: ip, Fields: fields}, nil
+	return &geoResult{IP: ip, Fields: fields}, nil
 }
 
 var (
@@ -145,7 +145,7 @@ var (
 	ipipLocRe = regexp.MustCompile(`来自于\s*[：:]?\s*(.*)`)
 )
 
-func parseIPIPNet(data []byte) (*GeoInfo, error) {
+func parseIPIPNet(data []byte) (*geoResult, error) {
 	s := strings.TrimSpace(string(data))
 	ip := ipipIPRe.FindString(s)
 	if ip == "" {
@@ -156,7 +156,7 @@ func parseIPIPNet(data []byte) (*GeoInfo, error) {
 	if ip == "" {
 		return nil, fmt.Errorf("响应中未找到 IP")
 	}
-	info := &GeoInfo{IP: ip}
+	info := &geoResult{IP: ip}
 	if m := ipipLocRe.FindStringSubmatch(s); m != nil {
 		fields := strings.FieldsFunc(m[1], unicode.IsSpace)
 		add := func(key, val string) {

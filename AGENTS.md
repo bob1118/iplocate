@@ -28,5 +28,6 @@ Go CLI (`module iplocate`, stdlib-only) that prints local IPv4/IPv6 plus public 
 
 ## Testing
 
-- Tests are pure unit tests over parsers and `fetchPublicIP` fallback logic via `httptest`. No network access or environment setup is required; keep it that way (add parse-level tests rather than live-provider tests).
+- Tests live in parse_test.go and provider_test.go, split by source file. They are pure unit tests over parsers and `fetchPublicIP` fallback logic via `httptest`. No network access or environment setup is required; keep it that way (add parse-level tests rather than live-provider tests).
 - `fetchPublicIP` takes an injected `*http.Client`, so tests pass `http.DefaultClient` and hit loopback httptest servers regardless of family pinning.
+- Don't try to unit-test `fetchGeo` directly: its provider list comes from hard-wired `defaultProviders()`/`providersFor()`, so a direct call would hit the real network. Test URL selection via `providersFor` and HTTP/fallback behavior at the `fetchPublicIP` level with synthetic provider slices instead.
