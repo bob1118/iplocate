@@ -216,12 +216,19 @@ func TestFetchPublicIPFallback(t *testing.T) {
 		{name: "broken", url: broken.URL, parse: parseIPAPI},
 		{name: "ok", url: ok.URL, parse: parseIPAPI},
 	}
-	info, err := fetchPublicIP(providers, time.Second)
+	info, err := fetchPublicIP(providers, time.Second, "tcp4")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if info.Source != "ok" || info.IP != "9.9.9.9" {
 		t.Fatalf("expected fallback to ok provider, got: %+v", info)
+	}
+	if info.Family != "IPv4" {
+		t.Fatalf("expected IPv4 family, got: %q", info.Family)
+	}
+	wantRaw := `{"status":"success","query":"9.9.9.9","country":"中国"}`
+	if info.Raw != wantRaw {
+		t.Fatalf("raw body mismatch, got: %q", info.Raw)
 	}
 }
 
@@ -238,7 +245,7 @@ func TestFetchPublicIPTimeoutFallback(t *testing.T) {
 		{name: "slow", url: slow.URL, parse: parseIPAPI},
 		{name: "ok", url: ok.URL, parse: parseIPAPI},
 	}
-	info, err := fetchPublicIP(providers, 50*time.Millisecond)
+	info, err := fetchPublicIP(providers, 50*time.Millisecond, "tcp4")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -261,7 +268,7 @@ func TestFetchPublicIPAllFail(t *testing.T) {
 		{name: "alpha", url: a.URL, parse: parseIPAPI},
 		{name: "beta", url: b.URL, parse: parseIPAPI},
 	}
-	info, err := fetchPublicIP(providers, time.Second)
+	info, err := fetchPublicIP(providers, time.Second, "tcp4")
 	if err == nil {
 		t.Fatal("expected error when all providers fail")
 	}

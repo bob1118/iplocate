@@ -2,20 +2,52 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"net"
 	"time"
 )
 
-var probeTargets = []string{
-	"8.8.8.8:80", "[2001:4860:4860::8888]:80",
-	"223.5.5.5:53", "[2606:4700:4700::1111]:53",
-	"114.114.114.114:53", "[240c::6666]:53",
+var probeTargets4 = []string{"8.8.8.8:80", "223.5.5.5:53", "114.114.114.114:53"}
+
+var probeTargets6 = []string{"[2400:3200::1]:53", "[2606:4700:4700::1111]:53", "[240c::6666]:53"}
+
+func familyOf(network string) string {
+	if network == "tcp6" {
+		return "IPv6"
+	}
+	return "IPv4"
 }
 
-func localIPs() (net.IP, net.IP, error) {
-	var v4, v6 net.IP
-	for _, target := range probeTargets {
-		conn, err := net.DialTimeout("udp", target, time.Second)
+func targetsFor(network string) []string {
+	if network == "tcp6" {
+		return probeTargets6
+	}
+	return probeTargets4
+}
+
+func networkAvailable(network string) bool {
+	proto := "udp4"
+	if network == "tcp6" {
+		proto = "udp6"
+	}
+	for _, target := range targetsFor(network) {
+		conn, err := net.DialTimeout(proto, target, time.Second)
+		if err == nil {
+			conn.Close()
+			return true
+		}
+	}
+	return false
+}
+
+func localIP(network string) (net.IP, string, error) {
+	proto := "udp4"
+	if network == "tcp6" {
+		proto = "udp6"
+	}
+	var ip net.IP
+	for _, target := range targetsFor(network) {
+		conn, err := net.DialTimeout(proto, target, time.Second)
 		if err != nil {
 			continue
 		}
@@ -24,30 +56,16 @@ func localIPs() (net.IP, net.IP, error) {
 		if !ok || addr.IP == nil {
 			continue
 		}
-		if addr.IP.To4() != nil {
-			if v4 == nil {
-				v4 = addr.IP
-			}
-		} else if v6 == nil {
-			v6 = addr.IP
-		}
-		if v4 != nil && v6 != nil {
-			break
-		}
+		ip = addr.IP
+		break
 	}
-	if v4 == nil && v6 == nil {
-		return nil, nil, errors.New("无法探测本机 IP，请检查网络连接")
-	}
-	return v4, v6, nil
-}
-
-func ifaceNameFor(ip net.IP) string {
 	if ip == nil {
-		return ""
+		return nil, "", errors.New("无法探测本机 " + familyOf(network) + " 地址，请检查网络连接")
 	}
+
 	ifaces, err := net.Interfaces()
 	if err != nil {
-		return ""
+		return ip, "", fmt.Errorf("已获取本机 IP %s，但查询网卡名失败: %v", ip, err)
 	}
 	for _, ifc := range ifaces {
 		addrs, err := ifc.Addrs()
@@ -55,17 +73,17 @@ func ifaceNameFor(ip net.IP) string {
 			continue
 		}
 		for _, a := range addrs {
+			var cand net.IP
 			switch v := a.(type) {
 			case *net.IPNet:
-				if v.IP.Equal(ip) {
-					return ifc.Name
-				}
+				cand = v.IP
 			case *net.IPAddr:
-				if v.IP.Equal(ip) {
-					return ifc.Name
-				}
+				cand = v.IP
+			}
+			if cand != nil && cand.Equal(ip) {
+				return ip, ifc.Name, nil
 			}
 		}
 	}
-	return ""
+	return ip, "", nil
 }

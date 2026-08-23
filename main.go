@@ -4,57 +4,50 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"net"
 	"os"
+	"strings"
 	"time"
 )
 
-const (
-	labelWidth = 16
-	labelPad   = "                        "
-)
-
-var fieldLabels = map[string]string{
-	"ip":            "公网 IP",
-	"query":         "公网 IP",
-	"status":        "状态",
-	"message":       "消息",
-	"continent":     "大洲",
-	"country":       "国家",
-	"country_name":  "国家",
-	"countryCode":   "国家代码",
-	"country_code":  "国家代码",
-	"regionName":    "省份",
-	"region":        "地区",
-	"city":          "城市",
-	"district":      "区县",
-	"zip":           "邮编",
-	"postal":        "邮编",
-	"lat":           "纬度",
-	"latitude":      "纬度",
-	"lon":           "经度",
-	"longitude":     "经度",
-	"timezone":      "时区",
-	"offset":        "时区偏移",
-	"utc_offset":    "时区偏移",
-	"currency":      "货币",
-	"currency_name": "货币",
-	"isp":           "运营商",
-	"org":           "组织",
-	"as":            "自治域",
-	"asn":           "自治域",
-	"hostname":      "主机名",
-	"mobile":        "移动网络",
-	"proxy":         "代理",
-	"hosting":       "托管主机",
+type geoResult struct {
+	IP     string  `json:"ip,omitempty"`
+	Family string  `json:"family,omitempty"`
+	Source string  `json:"source,omitempty"`
+	Error  string  `json:"error,omitempty"`
+	Raw    string  `json:"raw,omitempty"`
+	Fields []field `json:"fields,omitempty"`
 }
 
 type result struct {
-	LocalV4 net.IP
-	IfaceV4 string
-	LocalV6 net.IP
-	IfaceV6 string
-	Geo     *GeoInfo
+	LocalIPv4  string     `json:"local_ipv4,omitempty"`
+	LocalIPv6  string     `json:"local_ipv6,omitempty"`
+	Interface  string     `json:"interface,omitempty"`
+	PublicIPv4 *geoResult `json:"public_ipv4"`
+	PublicIPv6 *geoResult `json:"public_ipv6"`
+}
+
+var fieldLabels = map[string]string{
+	"status":       "状态",
+	"message":      "消息",
+	"query":        "查询 IP",
+	"ip":           "IP 地址",
+	"country":      "国家/地区",
+	"country_name": "国家/地区",
+	"countryCode":  "国家代码",
+	"regionName":   "省/州",
+	"region":       "省/州",
+	"region_code":  "区域代码",
+	"city":         "城市",
+	"isp":          "运营商",
+	"org":          "组织",
+	"as":           "AS 号",
+	"hostname":     "主机名",
+	"loc":          "经纬度",
+	"latitude":     "纬度",
+	"longitude":    "经度",
+	"timezone":     "时区",
+	"utc_offset":   "UTC 偏移",
+	"postal":       "邮编",
 }
 
 func main() {
@@ -62,108 +55,123 @@ func main() {
 	timeout := flag.Duration("timeout", 3*time.Second, "单个公网 IP 服务请求超时时间")
 	flag.Parse()
 
+	os.Exit(run(*jsonOut, *timeout))
+}
+
+func run(jsonOut bool, timeout time.Duration) int {
+	v6OK := networkAvailable("tcp6")
+
 	res := &result{}
-	if v4, v6, err := localIPs(); err != nil {
+	if ip4, iface, err := localIP("tcp4"); err != nil {
 		fmt.Fprintf(os.Stderr, "警告: %v\n", err)
 	} else {
-		res.LocalV4, res.IfaceV4 = v4, ifaceNameFor(v4)
-		res.LocalV6, res.IfaceV6 = v6, ifaceNameFor(v6)
+		res.LocalIPv4 = ip4.String()
+		res.Interface = iface
+	}
+	if v6OK {
+		if ip6, iface, err := localIP("tcp6"); err == nil {
+			res.LocalIPv6 = ip6.String()
+			if res.Interface == "" {
+				res.Interface = iface
+			}
+		}
 	}
 
-	geo, err := fetchPublicIP(defaultProviders(), *timeout)
+	res.PublicIPv4 = fetchGeo(timeout, "tcp4")
+	if v6OK {
+		res.PublicIPv6 = fetchGeo(timeout, "tcp6")
+	} else {
+		fmt.Fprintln(os.Stderr, "提示: 未检测到可用的 IPv6 网络，已跳过 IPv6 查询")
+	}
+
+	printResult(res, jsonOut)
+
+	if res.PublicIPv4.Error != "" && (res.PublicIPv6 == nil || res.PublicIPv6.Error != "") {
+		return 1
+	}
+	return 0
+}
+
+func fetchGeo(timeout time.Duration, network string) *geoResult {
+	info, err := fetchPublicIP(defaultProviders(), timeout, network)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "错误: %v\n", err)
-		os.Exit(1)
+		return &geoResult{Family: familyOf(network), Error: err.Error()}
 	}
-	res.Geo = geo
-
-	printResult(res, *jsonOut)
+	return &geoResult{
+		IP:     info.IP,
+		Family: info.Family,
+		Source: info.Source,
+		Raw:    info.Raw,
+		Fields: info.Fields,
+	}
 }
 
 func printResult(res *result, jsonOut bool) {
 	if jsonOut {
-		writeJSON(res)
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetEscapeHTML(false)
+		enc.SetIndent("", "  ")
+		_ = enc.Encode(res)
 		return
 	}
-	printLocal(res)
-	printGeo(res.Geo)
+
+	locLabel := "本机 IPv4"
+	if res.Interface != "" {
+		locLabel += fmt.Sprintf(" (%s)", res.Interface)
+	}
+	if res.LocalIPv4 != "" {
+		fmt.Printf("%s%s\n", padLabel(locLabel+":"), res.LocalIPv4)
+	}
+	if res.LocalIPv6 != "" {
+		fmt.Printf("%s%s\n", padLabel("本机 IPv6 ("+res.Interface+"):"), res.LocalIPv6)
+	}
+	fmt.Println()
+	printGeo(res.PublicIPv4, "公网 IPv4")
+	if res.PublicIPv6 != nil {
+		fmt.Println()
+		printGeo(res.PublicIPv6, "公网 IPv6")
+	} else {
+		fmt.Printf("%s%s\n", padLabel("公网 IPv6:"), "（未检测到 IPv6 网络）")
+	}
 }
 
-func printLocal(res *result) {
-	if res.LocalV4 == nil && res.LocalV6 == nil {
-		return
-	}
-	if res.LocalV4 != nil {
-		printLine(localLabel("本机 IP", res.IfaceV4), res.LocalV4.String())
-	}
-	if res.LocalV6 != nil {
-		printLine(localLabel("本机 IPv6", res.IfaceV6), res.LocalV6.String())
-	}
-}
-
-func printGeo(g *GeoInfo) {
+func printGeo(g *geoResult, label string) {
 	if g == nil {
+		fmt.Printf("%s%s\n", padLabel(label+":"), "（不可用）")
 		return
 	}
-	printLine("公网 IP:", g.IP)
-	printLine("数据源:", g.Source)
-	for _, f := range g.Fields {
-		if f.Key == "ip" || f.Key == "query" {
-			continue
+	if g.Error != "" {
+		fmt.Printf("%s%s\n", padLabel(label+":"), "（失败）")
+		fmt.Fprintf(os.Stderr, "%s 错误详情:\n%s\n", label, g.Error)
+		return
+	}
+	fmt.Printf("%s%s\n", padLabel(label+":"), g.IP)
+	fmt.Printf("%s%s\n", padLabel("数据源:"), g.Source)
+	printFields(g.Fields)
+}
+
+func printFields(fields []field) {
+	fmt.Println(strings.Repeat("─", 44))
+	for _, f := range fields {
+		name := f.Key
+		if zh, ok := fieldLabels[f.Key]; ok {
+			name = zh
 		}
-		printLine(fieldLabel(f.Key)+":", f.Value)
+		fmt.Printf("%s%s\n", pad(name+":", 22), f.Value)
 	}
+	fmt.Println(strings.Repeat("─", 44))
 }
 
-func writeJSON(res *result) {
-	out := make(map[string]any)
-	setLocal := func(ipKey, ifaceKey string, ip net.IP, iface string) {
-		if ip == nil {
-			return
-		}
-		out[ipKey] = ip.String()
-		if iface != "" {
-			out[ifaceKey] = iface
-		}
-	}
-	setLocal("local_ipv4", "interface_v4", res.LocalV4, res.IfaceV4)
-	setLocal("local_ipv6", "interface_v6", res.LocalV6, res.IfaceV6)
-	if res.Geo != nil {
-		for _, f := range res.Geo.Fields {
-			out[f.Key] = f.Value
-		}
-		out["source"] = res.Geo.Source
-	}
-	enc := json.NewEncoder(os.Stdout)
-	enc.SetEscapeHTML(false)
-	enc.SetIndent("", "  ")
-	_ = enc.Encode(out)
-}
-
-func fieldLabel(key string) string {
-	if zh, ok := fieldLabels[key]; ok {
-		return zh
-	}
-	return key
-}
-
-func localLabel(base, iface string) string {
-	if iface != "" {
-		base += fmt.Sprintf(" (%s)", iface)
-	}
-	return base + ":"
-}
-
-func printLine(labelText, value string) {
-	fmt.Printf("%s%s\n", padLabel(labelText), value)
-}
-
-func padLabel(s string) string {
-	pad := labelWidth - displayWidth(s)
+func pad(s string, width int) string {
+	pad := width - displayWidth(s)
 	if pad < 1 {
 		pad = 1
 	}
-	return s + labelPad[:pad]
+	return s + strings.Repeat(" ", pad)
+}
+
+func padLabel(s string) string {
+	return pad(s, 18)
 }
 
 func displayWidth(s string) int {
