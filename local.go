@@ -7,6 +7,8 @@ import (
 	"time"
 )
 
+const probeTimeout = time.Second
+
 var probeTargets4 = []string{"8.8.8.8:80", "223.5.5.5:53", "114.114.114.114:53"}
 
 var probeTargets6 = []string{"[2400:3200::1]:53", "[2606:4700:4700::1111]:53", "[240c::6666]:53"}
@@ -26,12 +28,8 @@ func targetsFor(network string) []string {
 }
 
 func networkAvailable(network string) bool {
-	proto := "udp4"
-	if network == "tcp6" {
-		proto = "udp6"
-	}
 	for _, target := range targetsFor(network) {
-		conn, err := net.DialTimeout(proto, target, time.Second)
+		conn, err := net.DialTimeout(network, target, probeTimeout)
 		if err == nil {
 			conn.Close()
 			return true
@@ -47,7 +45,7 @@ func localIP(network string) (net.IP, string, error) {
 	}
 	var ip net.IP
 	for _, target := range targetsFor(network) {
-		conn, err := net.DialTimeout(proto, target, time.Second)
+		conn, err := net.DialTimeout(proto, target, probeTimeout)
 		if err != nil {
 			continue
 		}
