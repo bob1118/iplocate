@@ -108,6 +108,14 @@ func lookupField(fields []field, key string) string {
 	return ""
 }
 
+func resultFrom(fields []field, ipKey string) (*geoResult, error) {
+	ip := lookupField(fields, ipKey)
+	if ip == "" {
+		return nil, errNoIP
+	}
+	return &geoResult{IP: ip, Fields: fields}, nil
+}
+
 func parseIPAPI(data []byte) (*geoResult, error) {
 	fields, err := flattenJSON(data)
 	if err != nil {
@@ -120,11 +128,7 @@ func parseIPAPI(data []byte) (*geoResult, error) {
 		}
 		return nil, fmt.Errorf("服务返回失败: %s", msg)
 	}
-	ip := lookupField(fields, "query")
-	if ip == "" {
-		return nil, fmt.Errorf("响应中缺少 IP")
-	}
-	return &geoResult{IP: ip, Fields: fields}, nil
+	return resultFrom(fields, "query")
 }
 
 func parseIPInfo(data []byte) (*geoResult, error) {
@@ -132,11 +136,7 @@ func parseIPInfo(data []byte) (*geoResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	ip := lookupField(fields, "ip")
-	if ip == "" {
-		return nil, fmt.Errorf("响应中缺少 IP")
-	}
-	return &geoResult{IP: ip, Fields: fields}, nil
+	return resultFrom(fields, "ip")
 }
 
 var (

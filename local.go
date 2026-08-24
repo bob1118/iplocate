@@ -27,15 +27,23 @@ func targetsFor(network string) []string {
 	return probeTargets4
 }
 
-func networkAvailable(network string) bool {
-	for _, target := range targetsFor(network) {
+func firstDial(network string, targets []string) net.Conn {
+	for _, target := range targets {
 		conn, err := net.DialTimeout(network, target, probeTimeout)
 		if err == nil {
-			conn.Close()
-			return true
+			return conn
 		}
 	}
-	return false
+	return nil
+}
+
+func networkAvailable(network string) bool {
+	conn := firstDial(network, targetsFor(network))
+	if conn == nil {
+		return false
+	}
+	conn.Close()
+	return true
 }
 
 func localIP(network string) (net.IP, string, error) {
@@ -43,23 +51,17 @@ func localIP(network string) (net.IP, string, error) {
 	if network == "tcp6" {
 		proto = "udp6"
 	}
-	var ip net.IP
-	for _, target := range targetsFor(network) {
-		conn, err := net.DialTimeout(proto, target, probeTimeout)
-		if err != nil {
-			continue
-		}
-		addr, ok := conn.LocalAddr().(*net.UDPAddr)
-		conn.Close()
-		if !ok || addr.IP == nil {
-			continue
-		}
-		ip = addr.IP
-		break
+	errNoLocal := errors.New("无法探测本机 " + familyOf(network) + " 地址，请检查网络连接")
+	conn := firstDial(proto, targetsFor(network))
+	if conn == nil {
+		return nil, "", errNoLocal
 	}
-	if ip == nil {
-		return nil, "", errors.New("无法探测本机 " + familyOf(network) + " 地址，请检查网络连接")
+	addr, ok := conn.LocalAddr().(*net.UDPAddr)
+	conn.Close()
+	if !ok || addr.IP == nil {
+		return nil, "", errNoLocal
 	}
+	ip := addr.IP
 
 	ifaces, err := net.Interfaces()
 	if err != nil {

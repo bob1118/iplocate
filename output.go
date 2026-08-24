@@ -92,7 +92,7 @@ func printFields(fields []field) {
 		if zh, ok := fieldLabels[f.Key]; ok {
 			name = zh
 		}
-		fmt.Printf("%s%s\n", pad(name+":", 22), f.Value)
+		line(name+":", f.Value)
 	}
 	fmt.Println(sep)
 }

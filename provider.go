@@ -17,6 +17,8 @@ const (
 	dialTimeout = 2 * time.Second
 )
 
+var errNoIP = errors.New("响应中缺少 IP")
+
 type provider struct {
 	name  string
 	url   string
@@ -104,7 +106,7 @@ func fetchPublicIP(providers []provider, client *http.Client, timeout time.Durat
 			case perr != nil:
 				err = perr
 			case info == nil || info.IP == "":
-				err = fmt.Errorf("响应中缺少 IP")
+				err = errNoIP
 			default:
 				info.Source = p.name
 				info.Raw = strings.TrimSpace(string(data))
