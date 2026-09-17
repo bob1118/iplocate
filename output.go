@@ -49,9 +49,11 @@ func printJSON(res *result) {
 func printText(res *result) {
 	if res.LocalIPv4 != "" {
 		line(ifaceLabel("本机 IPv4", res.InterfaceV4), res.LocalIPv4)
+		printDNS(res.DNS, res.DNSError, "IPv4")
 	}
 	if res.LocalIPv6 != "" {
 		line(ifaceLabel("本机 IPv6", res.InterfaceV6), res.LocalIPv6)
+		printDNS(res.DNS, res.DNSError, "IPv6")
 	}
 	fmt.Println()
 	printGeo(res.PublicIPv4, "公网 IPv4")
@@ -60,6 +62,42 @@ func printText(res *result) {
 		printGeo(res.PublicIPv6, "公网 IPv6")
 	} else {
 		line("公网 IPv6:", "（未检测到 IPv6 网络）")
+	}
+}
+
+func printDNS(results []dnsResult, err, network string) {
+	var dns *dnsResult
+	for i := range results {
+		if results[i].Network == network {
+			dns = &results[i]
+			break
+		}
+	}
+	if err != "" {
+		line("DNS "+network+":", "（读取失败）")
+		fmt.Fprintf(os.Stderr, "DNS 错误详情:\n%s\n", err)
+		return
+	}
+	if dns == nil {
+		line("DNS "+network+":", "（未找到）")
+		return
+	}
+	line("DNS "+network+":", dns.IP)
+	if dns.Reachable {
+		line("DNS 查询:", fmt.Sprintf("可用（%d ms）", dns.LatencyMS))
+	} else {
+		line("DNS 查询:", "失败")
+		if dns.Error != "" {
+			line("失败原因:", dns.Error)
+		}
+	}
+	if dns.Ownership == nil {
+		line("DNS 归属:", "（未查询）")
+	} else if dns.Ownership.Error != "" {
+		line("DNS 归属:", "（查询失败）")
+	} else {
+		line("DNS 归属数据源:", dns.Ownership.Source)
+		printFields(dns.Ownership.Fields)
 	}
 }
 

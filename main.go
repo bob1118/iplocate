@@ -35,6 +35,13 @@ func run(jsonOut bool, timeout time.Duration) int {
 		fmt.Fprintln(os.Stderr, "提示: 未检测到可用的 IPv6 网络，已跳过 IPv6 查询")
 	}
 
+	if dnsServers, err := configuredDNS(res.LocalIPv4, res.LocalIPv6); err != nil {
+		res.DNSError = err.Error()
+		fmt.Fprintf(os.Stderr, "警告: %v\n", err)
+	} else {
+		res.DNS = inspectDNS(primaryDNS(dnsServers), timeout, probeConfiguredDNS, lookupDNSOwnership)
+	}
+
 	res.PublicIPv4 = fetchGeo(clientV4, timeout, "tcp4", "")
 	if v6OK {
 		res.PublicIPv6 = fetchGeo(clientV6, timeout, "tcp6", "")

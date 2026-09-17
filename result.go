@@ -15,10 +15,12 @@ type geoResult struct {
 }
 
 type result struct {
-	LocalIPv4   string     `json:"local_ipv4,omitempty"`
-	InterfaceV4 string     `json:"interface_v4,omitempty"`
-	LocalIPv6   string     `json:"local_ipv6,omitempty"`
-	InterfaceV6 string     `json:"interface_v6,omitempty"`
-	PublicIPv4  *geoResult `json:"public_ipv4"`
-	PublicIPv6  *geoResult `json:"public_ipv6"`
+	LocalIPv4   string      `json:"local_ipv4,omitempty"`
+	InterfaceV4 string      `json:"interface_v4,omitempty"`
+	LocalIPv6   string      `json:"local_ipv6,omitempty"`
+	InterfaceV6 string      `json:"interface_v6,omitempty"`
+	DNS         []dnsResult `json:"dns,omitempty"`
+	DNSError    string      `json:"dns_error,omitempty"`
+	PublicIPv4  *geoResult  `json:"public_ipv4"`
+	PublicIPv6  *geoResult  `json:"public_ipv6"`
 }
