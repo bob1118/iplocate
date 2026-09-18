@@ -4,20 +4,25 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"net"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
-const (
-	userAgent   = "iplocate/1.0"
-	maxBodySize = 64 << 10
-	dialTimeout = 2 * time.Second
-)
-
 var errNoIP = errors.New("响应中缺少 IP")
+
+const ipAPIName = "ip-api.com"
+
+var geoAPIServiceHealthy atomic.Bool
+
+func init() {
+	geoAPIServiceHealthy.Store(true)
+}
+
+func markIPAPIServiceFailure() {
+	geoAPIServiceHealthy.Store(false)
+}
 
 type provider struct {
 	name  string
@@ -25,26 +30,10 @@ type provider struct {
 	parse func([]byte) (*geoResult, error)
 }
 
-func newFamClient(network string) *http.Client {
-	dialer := &net.Dialer{Timeout: dialTimeout}
-	transport := &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
-		DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
-			return dialer.DialContext(ctx, network, addr)
-		},
-	}
-	return &http.Client{Transport: transport}
-}
-
-var (
-	clientV4 = newFamClient("tcp4")
-	clientV6 = newFamClient("tcp6")
-)
-
 func defaultProviders() []provider {
 	return []provider{
 		{
-			name:  "ip-api.com",
+			name:  ipAPIName,
 			url:   "http://ip-api.com/json/{ip}?fields=status,message,country,regionName,city,isp,query&lang=zh-CN",
 			parse: parseIPAPI,
 		},
@@ -77,23 +66,6 @@ func providersFor(queryIP string) []provider {
 	return out
 }
 
-func httpGet(ctx context.Context, client *http.Client, url string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("User-Agent", userAgent)
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
-	}
-	return io.ReadAll(io.LimitReader(resp.Body, maxBodySize))
-}
-
 func fetchPublicIP(providers []provider, client *http.Client, timeout time.Duration) (*geoResult, error) {
 	var errs []string
 	for _, p := range providers {
@@ -112,18 +84,52 @@ func fetchPublicIP(providers []provider, client *http.Client, timeout time.Durat
 				info.Raw = strings.TrimSpace(string(data))
 				return info, nil
 			}
+			if p.name == ipAPIName && perr != nil {
+				markIPAPIServiceFailure()
+			}
+		}
+		if p.name == ipAPIName && respErrIsLimited(err) {
+			markIPAPIServiceFailure()
 		}
 		errs = append(errs, fmt.Sprintf("%s: %v", p.name, err))
 	}
 	return nil, errors.New(strings.Join(errs, "\n  "))
 }
 
-func fetchGeo(client *http.Client, timeout time.Duration, network, queryIP string) *geoResult {
-	family := familyOf(network)
-	res, err := fetchPublicIP(providersFor(queryIP), client, timeout)
-	if err != nil {
-		return &geoResult{Family: family, Error: fmt.Sprintf("%s 所有服务均失败:\n  %s", family, err)}
+func respErrIsLimited(err error) bool {
+	if err == nil {
+		return false
 	}
-	res.Family = family
-	return res
+	msg := err.Error()
+	return strings.Contains(msg, "HTTP 429") || strings.Contains(msg, "The requested resource requires an authentication key")
+}
+
+func fetchGeo(client *http.Client, timeout time.Duration, network, queryIP string) *geoResult {
+	return fetchGeoProviders(providersFor(queryIP), []*http.Client{client}, timeout, timeout, network)
+}
+
+func fetchGeoProviders(providers []provider, clients []*http.Client, timeout, budget time.Duration, network string) *geoResult {
+	family := familyOf(network)
+	deadline := time.Now().Add(budget)
+	var lastErr error
+	for _, client := range clients {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			break
+		}
+		attempt := timeout
+		if remaining < attempt {
+			attempt = remaining
+		}
+		res, err := fetchPublicIP(providers, client, attempt)
+		if err == nil {
+			res.Family = family
+			return res
+		}
+		lastErr = err
+	}
+	if lastErr == nil {
+		lastErr = errors.New("重试预算已用尽")
+	}
+	return &geoResult{Family: family, Error: fmt.Sprintf("%s 所有服务均失败:\n  %s", family, lastErr)}
 }

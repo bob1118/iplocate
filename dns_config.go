@@ -1,31 +1,14 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"net"
 	"os"
 	"os/exec"
 	"runtime"
 	"strings"
-	"time"
 	"unicode"
 )
-
-const dnsProbeDomain = "example.com"
-
-type dnsResult struct {
-	IP        string     `json:"ip"`
-	Network   string     `json:"network"`
-	Family    string     `json:"family"`
-	Reachable bool       `json:"reachable"`
-	LatencyMS int64      `json:"latency_ms,omitempty"`
-	Ownership *geoResult `json:"ownership,omitempty"`
-	Error     string     `json:"error,omitempty"`
-}
-
-type dnsProbe func(context.Context, string) (time.Duration, error)
-type dnsOwnership func(string, time.Duration) *geoResult
 
 type dnsConfig struct {
 	IP      string
@@ -45,26 +28,35 @@ func primaryDNS(servers []dnsConfig) []dnsConfig {
 	return out
 }
 
+var runtimeGOOSForTest = runtime.GOOS
+
 func configuredDNS(activeIPs ...string) ([]dnsConfig, error) {
-	var data []byte
-	var err error
-	switch runtime.GOOS {
+	switch runtimeGOOSForTest {
 	case "windows":
-		data, err = exec.Command("ipconfig", "/all").Output()
+		data, err := readWindowsDNSConfig()
 		if err == nil {
 			active := make(map[string]string, len(activeIPs))
 			for _, ip := range activeIPs {
 				active[ip] = familyOfIP(ip)
 			}
-			return parseIPConfigDNSConfigs(data, active), nil
+			configs := parseIPConfigDNSConfigs(data, active)
+			if len(configs) == 0 {
+				return nil, fmt.Errorf("读取系统 DNS 配置失败: 未解析到任何 DNS 服务器（输出可能为非 UTF-8 编码，请反馈样本）")
+			}
+			return configs, nil
 		}
+		return nil, fmt.Errorf("读取系统 DNS 配置失败: %w", err)
 	default:
-		data, err = os.ReadFile("/etc/resolv.conf")
+		data, err := os.ReadFile("/etc/resolv.conf")
 		if err == nil {
 			return parseResolvConfDNSConfigs(data), nil
 		}
+		return nil, fmt.Errorf("读取系统 DNS 配置失败: %w", err)
 	}
-	return nil, fmt.Errorf("读取系统 DNS 配置失败: %w", err)
+}
+
+var readWindowsDNSConfig = func() ([]byte, error) {
+	return exec.Command("ipconfig", "/all").Output()
 }
 
 func parseResolvConfDNS(data []byte) []string {
@@ -98,12 +90,11 @@ func parseIPConfigDNSConfigs(data []byte, active map[string]string) []dnsConfig 
 	var out []dnsConfig
 	var section []string
 	flush := func() {
-		network, ok := sectionNetwork(section, active)
-		if !ok {
+		if !sectionHasActiveIP(section, active) {
 			return
 		}
 		for _, ip := range parseIPConfigDNSSection(section) {
-			out = appendUniqueDNSConfig(out, dnsConfig{IP: ip, Network: network})
+			out = appendUniqueDNSConfig(out, dnsConfig{IP: ip, Network: familyOfIP(ip)})
 		}
 	}
 	for _, line := range strings.Split(string(data), "\n") {
@@ -125,18 +116,18 @@ func isIPConfigSectionHeader(line string) bool {
 	return trimmed != "" && !unicode.IsSpace([]rune(line)[0]) && strings.HasSuffix(trimmed, ":")
 }
 
-func sectionNetwork(section []string, active map[string]string) (string, bool) {
+func sectionHasActiveIP(section []string, active map[string]string) bool {
 	if len(active) == 0 {
-		return "", true
+		return true
 	}
 	for _, line := range section {
 		for _, found := range ipsFromLine(line) {
-			if network, ok := active[found]; ok {
-				return network, true
+			if _, ok := active[found]; ok {
+				return true
 			}
 		}
 	}
-	return "", false
+	return false
 }
 
 func parseIPConfigDNSSection(section []string) []string {
@@ -231,55 +222,4 @@ func appendUniqueIP(out []string, value string) []string {
 		}
 	}
 	return append(out, value)
-}
-
-func inspectDNS(servers []dnsConfig, timeout time.Duration, probe dnsProbe, ownership dnsOwnership) []dnsResult {
-	results := make([]dnsResult, 0, len(servers))
-	for _, server := range servers {
-		result := dnsResult{IP: server.IP, Network: server.Network, Family: familyOfIP(server.IP)}
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
-		latency, err := probe(ctx, server.IP)
-		cancel()
-		if err != nil {
-			result.Error = err.Error()
-		} else {
-			result.Reachable = true
-			result.LatencyMS = latency.Milliseconds()
-		}
-		result.Ownership = ownership(server.IP, timeout)
-		results = append(results, result)
-	}
-	return results
-}
-
-func familyOfIP(ip string) string {
-	parsed := net.ParseIP(ip)
-	if parsed != nil && parsed.To4() == nil {
-		return "IPv6"
-	}
-	return "IPv4"
-}
-
-func probeConfiguredDNS(ctx context.Context, server string) (time.Duration, error) {
-	started := time.Now()
-	resolver := &net.Resolver{
-		PreferGo: true,
-		Dial: func(dialContext context.Context, _, _ string) (net.Conn, error) {
-			dialer := &net.Dialer{Timeout: probeTimeout}
-			return dialer.DialContext(dialContext, "udp", net.JoinHostPort(server, "53"))
-		},
-	}
-	_, err := resolver.LookupHost(ctx, dnsProbeDomain)
-	return time.Since(started), err
-}
-
-func lookupDNSOwnership(ip string, timeout time.Duration) *geoResult {
-	return fetchGeo(clientV4, timeout, familyNetwork(ip), ip)
-}
-
-func familyNetwork(ip string) string {
-	if familyOfIP(ip) == "IPv6" {
-		return "tcp6"
-	}
-	return "tcp4"
 }

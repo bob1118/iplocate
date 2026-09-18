@@ -49,19 +49,24 @@ func printJSON(res *result) {
 func printText(res *result) {
 	if res.LocalIPv4 != "" {
 		line(ifaceLabel("本机 IPv4", res.InterfaceV4), res.LocalIPv4)
-		printDNS(res.DNS, res.DNSError, "IPv4")
 	}
-	if res.LocalIPv6 != "" {
-		line(ifaceLabel("本机 IPv6", res.InterfaceV6), res.LocalIPv6)
-		printDNS(res.DNS, res.DNSError, "IPv6")
-	}
-	fmt.Println()
 	printGeo(res.PublicIPv4, "公网 IPv4")
+	if res.LocalIPv6 != "" {
+		fmt.Println()
+		line(ifaceLabel("本机 IPv6", res.InterfaceV6), res.LocalIPv6)
+	}
 	if res.PublicIPv6 != nil {
 		fmt.Println()
 		printGeo(res.PublicIPv6, "公网 IPv6")
-	} else {
+	} else if res.LocalIPv6 != "" {
 		line("公网 IPv6:", "（未检测到 IPv6 网络）")
+	}
+	for _, network := range []string{"IPv4", "IPv6"} {
+		if network == "IPv6" && res.LocalIPv6 == "" && res.DNSError == "" {
+			continue
+		}
+		fmt.Println()
+		printDNS(res.DNS, res.DNSError, network)
 	}
 }
 

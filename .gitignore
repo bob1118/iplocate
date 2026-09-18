@@ -1,2 +1,4 @@
 /iplocate
 .DS_Store
+/tmp/
+/*.exe
