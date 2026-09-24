@@ -212,6 +212,13 @@ func TestParseIPIPNetRejectsNonIP(t *testing.T) {
 	}
 }
 
+func TestParseIPIPNetRejectsInvalidIPv4(t *testing.T) {
+	data := []byte("当前 IP：999.999.999.999 来自于：中国 广东 深圳 电信")
+	if _, err := parseIPIPNet(data); err == nil {
+		t.Fatal("expected error for invalid IPv4 address")
+	}
+}
+
 func TestParseInvalidData(t *testing.T) {
 	for name, tc := range map[string]struct {
 		parse func([]byte) (*geoResult, error)

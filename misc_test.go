@@ -23,7 +23,7 @@ func TestFamilyOfIP(t *testing.T) {
 
 func TestDisplayWidth(t *testing.T) {
 	if got := displayWidth("本机 IPv6"); got != 9 {
-		t.Fatalf("displayWidth(本机 IPv6) = %d, want 10", got)
+		t.Fatalf("displayWidth(本机 IPv6) = %d, want 9", got)
 	}
 	if got := displayWidth("DNS IPv4:"); got != 9 {
 		t.Fatalf("displayWidth(DNS IPv4:) = %d, want 9", got)

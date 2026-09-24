@@ -148,6 +148,9 @@ var (
 func parseIPIPNet(data []byte) (*geoResult, error) {
 	s := strings.TrimSpace(string(data))
 	ip := ipipIPRe.FindString(s)
+	if parsed := net.ParseIP(ip); ip != "" && (parsed == nil || parsed.To4() == nil) {
+		ip = ""
+	}
 	if ip == "" {
 		if c := ipipV6Re.FindString(s); c != "" && net.ParseIP(c) != nil {
 			ip = c

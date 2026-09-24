@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/http"
 	"sync"
@@ -11,7 +12,8 @@ import (
 const dnsProbeDomain = "example.com"
 
 type dnsResult struct {
-	IP        string     `json:"ip"`
+	IP string `json:"ip"`
+	// Network 是展示用的地址族分组，目前与 Family 相同；Family 为 JSON 兼容保留。
 	Network   string     `json:"network"`
 	Family    string     `json:"family"`
 	Reachable bool       `json:"reachable"`
@@ -77,14 +79,26 @@ func lookupDNSOwnership(ip string, timeout time.Duration) *geoResult {
 		return nil
 	}
 	network := familyNetwork(ip)
-	return fetchGeoProviders(providersFor(ip), ownershipClients(network), timeout, timeout, network)
+	return ensureExplicitIP(fetchGeoProviders(providersFor(ip), ownershipClients(network), timeout, timeout, network), ip)
+}
+
+func ensureExplicitIP(res *geoResult, queryIP string) *geoResult {
+	if res == nil || queryIP == "" || res.Error != "" {
+		return res
+	}
+	want := net.ParseIP(queryIP)
+	got := net.ParseIP(res.IP)
+	if want == nil || got == nil || want.Equal(got) {
+		return res
+	}
+	return &geoResult{Family: res.Family, Error: fmt.Sprintf("显式查询 IP 不一致：查询 %s，返回 %s", queryIP, res.IP)}
 }
 
 func ownershipClients(network string) []*http.Client {
 	if network == "tcp6" {
 		return []*http.Client{clientV6, clientV4}
 	}
-	return []*http.Client{clientV4, clientV4}
+	return []*http.Client{clientV4}
 }
 
 func familyOfIP(ip string) string {

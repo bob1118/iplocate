@@ -9,6 +9,11 @@ import (
 
 var warnMu sync.Mutex
 
+var (
+	localIPForProbe          = localIP
+	networkAvailableForProbe = networkAvailable
+)
+
 func warnf(format string, args ...any) {
 	warnMu.Lock()
 	defer warnMu.Unlock()
@@ -16,21 +21,26 @@ func warnf(format string, args ...any) {
 }
 
 func probeLocal(res *result) bool {
-	if ip4, iface, err := localIP("tcp4"); err != nil {
+	if ip4, iface, err := localIPForProbe("tcp4"); err != nil {
 		warnf("警告: %v\n", err)
 	} else {
 		res.LocalIPv4, res.InterfaceV4 = ip4.String(), iface
 	}
 
-	v6OK := networkAvailable("tcp6")
-	if !v6OK {
-		warnf("提示: 未检测到可用的 IPv6 网络，已跳过 IPv6 查询\n")
-		return false
-	}
-	if ip6, iface, err := localIP("tcp6"); err == nil {
+	// Obtain the route-selected local IPv6 independently of the TCP connectivity
+	// probe: a blocked probe target must not hide an otherwise usable local route.
+	if ip6, iface, err := localIPForProbe("tcp6"); err == nil {
 		res.LocalIPv6, res.InterfaceV6 = ip6.String(), iface
+	} else {
+		warnf("警告: %v\n", err)
 	}
-	return true
+
+	v6Reachable := networkAvailableForProbe("tcp6")
+	res.IPv6ProbeReachable = &v6Reachable
+	if !v6Reachable {
+		warnf("提示: IPv6 TCP 连通性探测未通过，公网 IPv6 查询已跳过\n")
+	}
+	return v6Reachable
 }
 
 func collectPublic(res *result, v6OK bool, timeout time.Duration) {

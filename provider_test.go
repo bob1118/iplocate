@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -60,7 +61,7 @@ func TestFetchPublicIPFallback(t *testing.T) {
 		{name: "broken", url: broken.URL, parse: parseIPAPI},
 		{name: "ok", url: ok.URL, parse: parseIPAPI},
 	}
-	info, err := fetchPublicIP(providers, http.DefaultClient, time.Second)
+	info, err := fetchPublicIP(providers, http.DefaultClient, time.Second, time.Time{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -86,7 +87,7 @@ func TestFetchPublicIPTimeoutFallback(t *testing.T) {
 		{name: "slow", url: slow.URL, parse: parseIPAPI},
 		{name: "ok", url: ok.URL, parse: parseIPAPI},
 	}
-	info, err := fetchPublicIP(providers, http.DefaultClient, 50*time.Millisecond)
+	info, err := fetchPublicIP(providers, http.DefaultClient, 50*time.Millisecond, time.Time{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -109,7 +110,7 @@ func TestFetchPublicIPAllFail(t *testing.T) {
 		{name: "alpha", url: a.URL, parse: parseIPAPI},
 		{name: "beta", url: b.URL, parse: parseIPAPI},
 	}
-	info, err := fetchPublicIP(providers, http.DefaultClient, time.Second)
+	info, err := fetchPublicIP(providers, http.DefaultClient, time.Second, time.Time{})
 	if err == nil {
 		t.Fatal("expected error when all providers fail")
 	}
@@ -120,5 +121,68 @@ func TestFetchPublicIPAllFail(t *testing.T) {
 		if !strings.Contains(err.Error(), name) {
 			t.Fatalf("error should mention %s, got: %v", name, err)
 		}
+	}
+}
+
+func TestFetchPublicIPKeepsHealthyOnOrdinaryParseError(t *testing.T) {
+	original := geoAPIServiceHealthy.Load()
+	defer func() { geoAPIServiceHealthy.Store(original) }()
+	geoAPIServiceHealthy.Store(true)
+
+	bad := okServer(t, `{"status":"fail","message":"reserved range"}`)
+	defer bad.Close()
+	providers := []provider{{name: ipAPIName, url: bad.URL, parse: parseIPAPI}}
+	if _, err := fetchPublicIP(providers, http.DefaultClient, time.Second, time.Time{}); err == nil {
+		t.Fatal("expected error for fail status")
+	}
+	if !geoAPIServiceHealthy.Load() {
+		t.Fatal("ordinary parse failure should not mark the service unhealthy")
+	}
+}
+
+func TestFetchPublicIPMarksUnhealthyOnHTTP429(t *testing.T) {
+	original := geoAPIServiceHealthy.Load()
+	defer func() { geoAPIServiceHealthy.Store(original) }()
+	geoAPIServiceHealthy.Store(true)
+
+	limited := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "rate limited", http.StatusTooManyRequests)
+	}))
+	defer limited.Close()
+	providers := []provider{{name: ipAPIName, url: limited.URL, parse: parseIPAPI}}
+	if _, err := fetchPublicIP(providers, http.DefaultClient, time.Second, time.Time{}); err == nil {
+		t.Fatal("expected error for HTTP 429")
+	}
+	if geoAPIServiceHealthy.Load() {
+		t.Fatal("HTTP 429 should mark the service unhealthy")
+	}
+}
+
+func TestFetchPublicIPBudgetAcrossProviders(t *testing.T) {
+	var secondHits atomic.Int64
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(300 * time.Millisecond)
+		_, _ = w.Write([]byte(`{"status":"success","query":"9.9.9.9"}`))
+	}))
+	defer slow.Close()
+	second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		secondHits.Add(1)
+		http.Error(w, "should not run", http.StatusServiceUnavailable)
+	}))
+	defer second.Close()
+	providers := []provider{
+		{name: "slow", url: slow.URL, parse: parseIPAPI},
+		{name: "second", url: second.URL, parse: parseIPAPI},
+	}
+
+	started := time.Now()
+	if _, err := fetchPublicIP(providers, http.DefaultClient, time.Second, time.Now().Add(120*time.Millisecond)); err == nil {
+		t.Fatal("expected error when budget expires")
+	}
+	if elapsed := time.Since(started); elapsed > 800*time.Millisecond {
+		t.Fatalf("budget should bound provider attempts, elapsed: %v", elapsed)
+	}
+	if got := secondHits.Load(); got != 0 {
+		t.Fatalf("budget should prevent the second provider, hits: %d", got)
 	}
 }

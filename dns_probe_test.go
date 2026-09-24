@@ -129,3 +129,22 @@ func TestFetchGeoProvidersRetryFallsThroughInBudget(t *testing.T) {
 		t.Fatalf("expected retry within budget to reach ok provider, got: %+v", res)
 	}
 }
+
+func TestEnsureExplicitIP(t *testing.T) {
+	matched := &geoResult{IP: "9.9.9.9", Family: "IPv4"}
+	if got := ensureExplicitIP(matched, "9.9.9.9"); got != matched {
+		t.Fatalf("matching IP should pass through, got: %+v", got)
+	}
+	normalized := &geoResult{IP: "2001:0db8:0000:0000:0000:0000:0000:0001", Family: "IPv6"}
+	if got := ensureExplicitIP(normalized, "2001:db8::1"); got != normalized {
+		t.Fatalf("equivalent IPv6 forms should pass through, got: %+v", got)
+	}
+	failed := &geoResult{Family: "IPv4", Error: "boom"}
+	if got := ensureExplicitIP(failed, "8.8.8.8"); got != failed {
+		t.Fatalf("errors should pass through, got: %+v", got)
+	}
+	mismatched := ensureExplicitIP(&geoResult{IP: "9.9.9.9", Family: "IPv4"}, "8.8.8.8")
+	if mismatched == nil || mismatched.Error == "" || mismatched.IP != "" {
+		t.Fatalf("mismatched explicit IP should become an error, got: %+v", mismatched)
+	}
+}

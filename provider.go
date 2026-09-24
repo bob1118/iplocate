@@ -66,10 +66,20 @@ func providersFor(queryIP string) []provider {
 	return out
 }
 
-func fetchPublicIP(providers []provider, client *http.Client, timeout time.Duration) (*geoResult, error) {
+func fetchPublicIP(providers []provider, client *http.Client, timeout time.Duration, deadline time.Time) (*geoResult, error) {
 	var errs []string
 	for _, p := range providers {
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		attempt := timeout
+		if !deadline.IsZero() {
+			remaining := time.Until(deadline)
+			if remaining <= 0 {
+				break
+			}
+			if remaining < attempt {
+				attempt = remaining
+			}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), attempt)
 		data, err := httpGet(ctx, client, p.url)
 		cancel()
 		if err == nil {
@@ -84,7 +94,7 @@ func fetchPublicIP(providers []provider, client *http.Client, timeout time.Durat
 				info.Raw = strings.TrimSpace(string(data))
 				return info, nil
 			}
-			if p.name == ipAPIName && perr != nil {
+			if p.name == ipAPIName && respErrIsLimited(perr) {
 				markIPAPIServiceFailure()
 			}
 		}
@@ -92,6 +102,9 @@ func fetchPublicIP(providers []provider, client *http.Client, timeout time.Durat
 			markIPAPIServiceFailure()
 		}
 		errs = append(errs, fmt.Sprintf("%s: %v", p.name, err))
+	}
+	if len(errs) == 0 {
+		return nil, errors.New("重试预算已用尽")
 	}
 	return nil, errors.New(strings.Join(errs, "\n  "))
 }
@@ -121,7 +134,7 @@ func fetchGeoProviders(providers []provider, clients []*http.Client, timeout, bu
 		if remaining < attempt {
 			attempt = remaining
 		}
-		res, err := fetchPublicIP(providers, client, attempt)
+		res, err := fetchPublicIP(providers, client, attempt, deadline)
 		if err == nil {
 			res.Family = family
 			return res

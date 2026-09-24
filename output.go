@@ -55,9 +55,25 @@ func printText(res *result) {
 		fmt.Println()
 		line(ifaceLabel("本机 IPv6", res.InterfaceV6), res.LocalIPv6)
 	}
+	if res.IPv6ProbeReachable != nil {
+		status := "目标不可达"
+		if *res.IPv6ProbeReachable {
+			status = "目标可达"
+		}
+		fmt.Println()
+		line("IPv6 TCP 探测:", status)
+	}
 	if res.PublicIPv6 != nil {
 		fmt.Println()
 		printGeo(res.PublicIPv6, "公网 IPv6")
+	} else if res.IPv6ProbeReachable != nil {
+		if !*res.IPv6ProbeReachable {
+			line("公网 IPv6:", "（未查询：连通性探测未通过）")
+		} else if res.LocalIPv6 == "" {
+			line("公网 IPv6:", "（未查询：未获取本机 IPv6 源地址）")
+		} else {
+			line("公网 IPv6:", "（未查询）")
+		}
 	} else if res.LocalIPv6 != "" {
 		line("公网 IPv6:", "（未检测到 IPv6 网络）")
 	}
