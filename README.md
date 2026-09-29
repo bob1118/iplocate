@@ -10,7 +10,7 @@ go run . -json
 go run . -timeout 5s
 ```
 
-`-timeout` 默认 `3s`，用于每轮公网查询，以及每次 DNS 可达性探测和 DNS 归属查询。IPv6 直连失败后还可能进行一轮显式 IP 回退查询。它**不是整次程序运行的总时限**：公网 IPv4/IPv6 查询顺序执行，DNS 探测之后还可能执行独立的归属查询。本机地址和 IPv6 连通性预探测使用固定的每目标 `1s` 超时。
+`-timeout` 默认 `3s`，用于每轮公网查询，以及每次 DNS 可达性探测和 DNS 归属查询。单轮内四个归属服务是并发请求的，`-timeout` 约束的是该轮的整体墙钟时间，每个服务的单次尝试同样不超过它。IPv6 直连失败后还可能进行一轮显式 IP 回退查询。它**不是整次程序运行的总时限**：公网 IPv4 与 IPv6 两轮之间顺序执行，DNS 探测之后还可能执行独立的归属查询。本机地址和 IPv6 连通性预探测使用固定的每目标 `1s` 超时。
 
 ## IPv6 判定
 
@@ -18,7 +18,7 @@ go run . -timeout 5s
 
 ## 数据流与隐私
 
-- 公网归属查询按代码中的服务顺序尝试，首个成功结果胜出：ip-api.com、ipinfo.io、ipapi.co、myip.ipip.net。自动查询会让服务商看到请求的公网出口 IP；DNS 归属查询会向支持显式 IP 查询的服务发送 DNS 服务器地址。
+- 公网归属查询**并发**请求 ip-api.com、ipinfo.io、ipapi.co、myip.ipip.net 四家，取第一个成功返回的结果。这意味着无论哪家先响应，**每次自动查询都会把出口 IP 发给全部四家服务**，而不是只发给其中一家。DNS 归属查询会向支持显式 IP 查询的服务发送 DNS 服务器地址（当前只有 ip-api.com）。
 - DNS 可达性检查向系统配置的 DNS 服务器查询 `example.com`。Windows 从 `ipconfig /all` 读取配置；Unix 从 `/etc/resolv.conf` 读取。
 - ip-api.com 当前使用 HTTP；该连接不具备 HTTPS 的传输加密与完整性保护。避免在不可信网络中把该服务响应视为经过认证的数据。
 
@@ -34,4 +34,4 @@ go vet ./...
 gofmt -l .
 ```
 
-并发逻辑改动后额外运行 `go test -race ./...`。测试不依赖真实公网服务或 DNS。
+并发逻辑改动后额外运行 `go test -race ./...`（需要 CGO 与 gcc，配置见 AGENTS.md）。测试不依赖真实公网服务或 DNS。
