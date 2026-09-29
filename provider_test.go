@@ -1,6 +1,7 @@
 package main
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -176,13 +177,109 @@ func TestFetchPublicIPBudgetAcrossProviders(t *testing.T) {
 	}
 
 	started := time.Now()
-	if _, err := fetchPublicIP(providers, http.DefaultClient, time.Second, time.Now().Add(120*time.Millisecond)); err == nil {
+	_, err := fetchPublicIP(providers, http.DefaultClient, time.Second, time.Now().Add(120*time.Millisecond))
+	elapsed := time.Since(started)
+	if err == nil {
 		t.Fatal("expected error when budget expires")
 	}
-	if elapsed := time.Since(started); elapsed > 800*time.Millisecond {
+	if elapsed > 800*time.Millisecond {
 		t.Fatalf("budget should bound provider attempts, elapsed: %v", elapsed)
 	}
-	if got := secondHits.Load(); got != 0 {
-		t.Fatalf("budget should prevent the second provider, hits: %d", got)
+	// 并发后所有服务都会被请求，不再有「预算耗尽就跳过后续服务」的行为；
+	// 预算改为约束整体墙钟时间，由上面的 elapsed 断言守住。
+	if got := secondHits.Load(); got == 0 {
+		t.Fatal("concurrent fetch should have queried the second provider")
+	}
+}
+
+// cancelProbeTransport 在客户端侧观测取消：慢分支必定进入 RoundTrip 并阻塞在
+// req.Context() 上，因此不依赖「服务端 handler 是否来得及启动」这种时序假设。
+type cancelProbeTransport struct {
+	canceled chan string
+}
+
+func (t *cancelProbeTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if strings.Contains(req.URL.Path, "/slow") {
+		<-req.Context().Done()
+		t.canceled <- req.URL.Path
+		return nil, req.Context().Err()
+	}
+	body := `{"status":"success","query":"9.9.9.9"}`
+	return &http.Response{
+		StatusCode:    http.StatusOK,
+		Body:          io.NopCloser(strings.NewReader(body)),
+		Header:        make(http.Header),
+		ContentLength: int64(len(body)),
+		Request:       req,
+	}, nil
+}
+
+func TestFetchPublicIPCancelsRemainingOnSuccess(t *testing.T) {
+	transport := &cancelProbeTransport{canceled: make(chan string, 4)}
+	providers := []provider{
+		{name: "slow", url: "http://example.test/slow", parse: parseIPAPI},
+		{name: "ok", url: "http://example.test/ok", parse: parseIPAPI},
+	}
+
+	started := time.Now()
+	info, err := fetchPublicIP(providers, &http.Client{Transport: transport}, 5*time.Second, time.Time{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if info.Source != "ok" {
+		t.Fatalf("expected the responsive provider to win, got: %+v", info)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("should not wait for the slow provider, elapsed: %v", elapsed)
+	}
+	select {
+	case path := <-transport.canceled:
+		if path != "/slow" {
+			t.Fatalf("canceled request = %q, want /slow", path)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("expected the remaining in-flight request to be canceled")
+	}
+}
+
+func TestFetchPublicIPEmptyProviders(t *testing.T) {
+	_, err := fetchPublicIP(nil, http.DefaultClient, time.Second, time.Time{})
+	if err == nil || !strings.Contains(err.Error(), "重试预算已用尽") {
+		t.Fatalf("expected budget error for empty provider list, got: %v", err)
+	}
+}
+
+func TestFetchPublicIPAllFailErrorKeepsDeclarationOrder(t *testing.T) {
+	failing := func() *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "down", http.StatusBadGateway)
+		}))
+	}
+	// 首个服务故意慢一些，确保完成顺序与声明顺序不同。
+	slowFirst := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(200 * time.Millisecond)
+		http.Error(w, "down", http.StatusBadGateway)
+	}))
+	defer slowFirst.Close()
+	second := failing()
+	defer second.Close()
+	third := failing()
+	defer third.Close()
+
+	providers := []provider{
+		{name: "alpha", url: slowFirst.URL, parse: parseIPAPI},
+		{name: "beta", url: second.URL, parse: parseIPAPI},
+		{name: "gamma", url: third.URL, parse: parseIPAPI},
+	}
+	_, err := fetchPublicIP(providers, http.DefaultClient, 2*time.Second, time.Time{})
+	if err == nil {
+		t.Fatal("expected error when all providers fail")
+	}
+	alpha, beta, gamma := strings.Index(err.Error(), "alpha"), strings.Index(err.Error(), "beta"), strings.Index(err.Error(), "gamma")
+	if alpha < 0 || beta < 0 || gamma < 0 {
+		t.Fatalf("error should mention every provider, got: %v", err)
+	}
+	if !(alpha < beta && beta < gamma) {
+		t.Fatalf("error should list providers in declaration order, got: %v", err)
 	}
 }

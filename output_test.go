@@ -112,6 +112,16 @@ func TestPrintTextDNSFailureKeepsIPv6Section(t *testing.T) {
 	requireContains(t, errOut, "boom")
 }
 
+func TestPrintTextHandlesNilPublicResults(t *testing.T) {
+	res := &result{LocalIPv4: "192.168.1.10"}
+	out, _ := captureStdoutStderr(t, func() { printText(res) })
+	requireContains(t, out, "公网 IPv4:")
+	requireContains(t, out, "（不可用）")
+	if exitCode(res) != 1 {
+		t.Fatalf("nil public IPv4 must count as a failure, got exit code %d", exitCode(res))
+	}
+}
+
 func TestPrintJSONPublicIPv6Null(t *testing.T) {
 	res := &result{
 		LocalIPv4:  "192.168.1.10",

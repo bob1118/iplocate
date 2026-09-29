@@ -45,5 +45,13 @@ func httpGet(ctx context.Context, client *http.Client, url string) ([]byte, erro
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
-	return io.ReadAll(io.LimitReader(resp.Body, maxBodySize))
+	// 多读一个字节用于判断是否超限，避免超长响应被静默截断成难以定位的解析错误。
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodySize+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > maxBodySize {
+		return nil, fmt.Errorf("响应超过 %d 字节上限", maxBodySize)
+	}
+	return body, nil
 }

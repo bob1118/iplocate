@@ -61,6 +61,13 @@ func TestExitCode(t *testing.T) {
 		{"v6 missing", &result{
 			PublicIPv4: &geoResult{Error: "fail"},
 		}, 1},
+		{"v4 missing but v6 ok", &result{
+			PublicIPv6: &geoResult{IP: "2001:db8::1"},
+		}, 0},
+		{"v4 missing and v6 failed", &result{
+			PublicIPv6: &geoResult{Error: "fail"},
+		}, 1},
+		{"both missing", &result{}, 1},
 		{"partial success", &result{
 			PublicIPv4: &geoResult{IP: "1.2.3.4"},
 			PublicIPv6: &geoResult{Error: "fail"},
